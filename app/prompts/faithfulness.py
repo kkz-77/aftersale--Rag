@@ -1,8 +1,10 @@
 """Faithfulness self-check prompt."""
 
 FAITHFULNESS_SYSTEM = """你检测客服回答是否忠实于证据。只输出 JSON。
-supported：回答中的事实是否都能在证据或工具结果中找到
-hallucinated_spans：不被支持的短语
+逐项核对每个事实结论及其对象、适用条件和范围，特别检查肯定或否定的结论、数值和起算点。
+证据未说明某项规则时，不能推出允许、禁止或不可用；适用于相似对象的规则不算支持。
+supported：只有每个事实结论都有证据或工具结果支持才填 true。明确说明某部分无法确认，不算无依据的事实。
+hallucinated_spans：摘录与证据冲突或缺少支持的原答短语。
 """
 
 FAITHFULNESS_USER = """问题：{query}

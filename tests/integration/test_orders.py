@@ -1,16 +1,24 @@
+import json
+
 import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
+from app.config.settings import Settings
+from app.core.enums import RetrievalStrategy
 from app.core.request_scope import request_session
+from app.providers.base import LLMResponse
 from app.repositories.db import init_schema
 from app.repositories.idempotency import IdempotencyRepository
 from app.repositories.models import OrderItemRow, OrderRow, ProductRow
 from app.repositories.order_repository import OrderRepository
+from app.schemas.chat import ChatRequest
+from app.services.chat_service import ChatService
 from app.services.seed import seed_demo_data
 from app.tools.aftersale_tools import CreateRefundRequestTool
 from app.tools.base import ToolContext
+from app.tools.factory import build_tool_registry
 from app.tools.order_tools import GetOrderTool
 
 
@@ -28,6 +36,69 @@ async def session_factory():
         await session.commit()
     yield factory
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_chat_resolves_item_followup_from_previous_order(session_factory):
+    class Model:
+        async def generate(self, messages, **kwargs):
+            prompt = messages[-1]["content"]
+            if '"label"' in prompt:
+                label = "product_consult" if "这个商品是什么" in prompt else "order_inquiry"
+                reply = {"label": label, "confidence": 1, "prompt_version": "test"}
+            elif '"complexity"' in prompt:
+                assert (
+                    "这个商品是什么" not in prompt
+                )  # Scoped read route bypasses the model's direct decision.
+                reply = {"complexity": "simple", "strategy": "direct", "confidence": 1}
+            elif '"steps"' in prompt:
+                assert "这个商品是什么" not in prompt
+                reply = {
+                    "steps": [
+                        {
+                            "step_id": 1,
+                            "goal": "查状态",
+                            "tool_name": "get_order",
+                            "arguments": {"order_id": "ORD10001"},
+                        }
+                    ]
+                }
+            elif '"supported"' in prompt:
+                reply = {"supported": True}
+            else:
+                assert '"answer"' in prompt
+                if "这个商品是什么" in prompt:
+                    assert '"name": "get_order_items"' in prompt and "降噪耳机 Pro" in prompt
+                    reply = {"answer": "这笔订单里有一件降噪耳机 Pro。"}
+                else:
+                    assert "ORD10001" in prompt
+                    reply = {"answer": "这笔订单已发货。"}
+            return LLMResponse(json.dumps(reply, ensure_ascii=False))
+
+    class RateLimiter:
+        async def allow(self, key):
+            return True
+
+    service = ChatService(
+        settings=Settings(_env_file=None),
+        llm=Model(),
+        retriever=None,
+        reranker=None,
+        session_factory=session_factory,
+        rate_limiter=RateLimiter(),
+        registry=build_tool_registry(None),
+    )
+    first = await service.chat(
+        ChatRequest(user_id="u_demo", message="帮我查询订单 ORD10001 的状态。"),
+        trace_id="order-status",
+    )
+    second = await service.chat(
+        ChatRequest(user_id="u_demo", session_id=first.session_id, message="这个商品是什么？"),
+        trace_id="order-item-followup",
+    )
+    assert first.session_id == second.session_id
+    assert second.strategy == RetrievalStrategy.AGENT and not second.refused
+    assert "降噪耳机 Pro" in second.answer
 
 
 @pytest.mark.asyncio

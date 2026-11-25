@@ -59,6 +59,7 @@ class AppContainer:
         await self.engine.dispose()
 
 
+# 把和数据库有关的东西封装到一起
 async def build_infrastructure(settings: Settings):
     """Create the database session factory and optional Redis connection."""
     engine = create_engine(settings)
@@ -68,6 +69,7 @@ async def build_infrastructure(settings: Settings):
     return engine, session_factory, redis
 
 
+# 和检索有关的封装到一起
 async def build_retrieval(settings: Settings, redis):
     """Build the knowledge ingestion and hybrid retrieval components."""
     embedder = build_embedding_provider(settings)
@@ -84,6 +86,7 @@ async def build_retrieval(settings: Settings, redis):
         qdrant_collection=settings.qdrant_collection,
         embedding_dim=getattr(embedder, "dim", settings.embedding_dim),
     )
+    # 不同的检索套上相同的壳子,这个壳子实现检索的功能,
     retriever = HybridRetriever(
         bm25, VectorRetriever(store, embedder), rrf_k=settings.rrf_k, cache=cache
     )
@@ -91,6 +94,7 @@ async def build_retrieval(settings: Settings, redis):
     return retriever, reranker, store
 
 
+# 将大模型，数据库，检索，工具等封装到builder中
 async def build_container(settings: Settings, seed: bool = False) -> AppContainer:
     """Compose runtime services from independently testable infrastructure builders."""
     llm: LLMProvider = (

@@ -101,6 +101,7 @@ async def faithfulness_node(
     if result.supported:
         return {"extra": extra}
     HALLUCINATION_FLAGS.inc()
+    # 检查没完成
     if result.rationale == "checker_unavailable":
         fallback_answer, citation_ids = _offline_answer(state)
         citations = [
@@ -118,6 +119,7 @@ async def faithfulness_node(
             "citations": citations,
             "extra": extra,
         }
+    # 原结果没有通过检查
     patched, judged, corrected = await self_correct_answer(
         llm=llm,
         checker=checker,

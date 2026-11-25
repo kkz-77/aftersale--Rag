@@ -10,10 +10,13 @@ import pytest
 from app.config.settings import Settings
 from app.core.exceptions import LLMProviderError
 from app.providers.fake import FakeLLMProvider
-from app.retrieval.self_rag import SelfRAGLoop
+from app.retrieval.self_rag import AspectCheck, GradeResult, SelfRAGLoop
 from app.schemas.retrieval import RetrievedChunk
 
-_SUFFICIENT = '{"relevant": true, "sufficient": true, "missing_aspect": "", "rationale": "ok"}'
+_SUFFICIENT = (
+    '{"relevant": true, "sufficient": true, "missing_aspect": "", "rationale": "ok", '
+    '"checks": [{"aspect":"退货条件","supporting_chunk_ids":["c1"],"missing_aspect":""}]}'
+)
 _NOT_SUFFICIENT = (
     '{"relevant": true, "sufficient": false, "missing_aspect": "赔付", "rationale": "partial"}'
 )
@@ -55,10 +58,10 @@ class _PassthroughReranker:
 
 class _StubRewriter:
     def __init__(self) -> None:
-        self.calls = 0
+        self.calls: list[str] = []
 
     async def rewrite(self, query: str, *, missing_aspect: str = "") -> list[str]:
-        self.calls += 1
+        self.calls.append(missing_aspect)
         return [query]
 
 
@@ -88,6 +91,59 @@ async def test_loop_stops_when_first_grade_is_sufficient() -> None:
     assert [c.chunk_id for c in chunks] == ["c1"]
     assert len(retriever.calls) == 1
     assert len(llm.calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "checks",
+    [
+        "[]",
+        '[{"aspect":"退货条件","supporting_chunk_ids":["c1","unknown"],"missing_aspect":""}]',
+        '[{"aspect":"退款时效","supporting_chunk_ids":["c1"],"missing_aspect":"银行卡到账时效"}]',
+    ],
+)
+async def test_positive_grade_without_complete_support_continues(checks) -> None:
+    content = '{"relevant":true,"sufficient":true,"checks":' + checks + "}"
+    llm = FakeLLMProvider(canned={"": content})
+    retriever = _StubRetriever({"退货": [_chunk("c1")]})
+    loop = _loop(llm=llm, retriever=retriever)
+    rewriter = _StubRewriter()
+    loop._rewriter = rewriter
+    await loop.retrieve("退货", top_k=3)
+    assert len(llm.calls) == 3
+    assert rewriter.calls[1]
+    if "银行卡" in checks:
+        assert rewriter.calls[1] == "银行卡到账时效"
+
+
+@pytest.mark.asyncio
+async def test_grade_cannot_cite_chunk_outside_prompt_window() -> None:
+    llm = FakeLLMProvider(canned={"": _SUFFICIENT.replace('"c1"', '"c7"')})
+    loop = _loop(llm=llm, retriever=_StubRetriever({}))
+    grade = await loop._grade("退货", [_chunk(f"c{i}") for i in range(1, 8)])
+    assert not grade.sufficient
+    assert grade.missing_aspect == "退货条件"
+
+
+@pytest.mark.asyncio
+async def test_continuation_exposes_new_support_to_grader_and_generation() -> None:
+    first = [_chunk(f"c{i}") for i in range(6)]
+    complete = _SUFFICIENT.replace('["c1"]', '["c1","late"]')
+    llm = FakeLLMProvider(canned={"": complete})
+    retriever = _StubRetriever({"退货": [_chunk("late")]})
+    loop = _loop(llm=llm, retriever=retriever)
+    initial_grade = GradeResult(
+        relevant=True,
+        sufficient=False,
+        checks=[
+            AspectCheck(aspect="退货资格", supporting_chunk_ids=["c1"], missing_aspect=""),
+            AspectCheck(aspect="退费条件", supporting_chunk_ids=[], missing_aspect="退费条件"),
+        ],
+    )
+    result = await loop._retrieve("退货", top_k=8, first_hop=(first, initial_grade))
+    assert len(llm.calls) == 1
+    assert "[late]" in llm.calls[0][-1]["content"]
+    assert {"c1", "late"} <= {chunk.chunk_id for chunk in result[:6]}
 
 
 @pytest.mark.asyncio
@@ -136,12 +192,12 @@ async def test_loop_truncates_to_twice_rerank_top_n() -> None:
 @pytest.mark.asyncio
 async def test_loop_degrades_when_grading_llm_fails() -> None:
     retriever = _StubRetriever({"退货": [_chunk("c1")]})
-    loop = _loop(llm=_RaisingLLM(), retriever=retriever, hops=1)
+    loop = _loop(llm=_RaisingLLM(), retriever=retriever, hops=3)
 
     chunks = await loop.retrieve("退货", top_k=3)
 
-    # Fallback treats "we have chunks" as sufficient, so the hop stops.
     assert [c.chunk_id for c in chunks] == ["c1"]
+    assert len(retriever.calls) == 3
 
 
 @pytest.mark.asyncio

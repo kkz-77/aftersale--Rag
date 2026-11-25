@@ -71,6 +71,7 @@ async def execute_with_fallback(
         raise
     except (AppError, InvalidRequestError) as exc:
         last_error = str(exc)
+        # 降级，操作映射
         for fallback_name in READ_FALLBACKS.get(tool.name, []):
             if fallback_name not in registry.names():
                 continue
@@ -86,6 +87,7 @@ async def execute_with_fallback(
                         "fallback_error": last_error,
                     }
                     TOOL_CALLS.labels(tool=fallback_name, status="fallback").inc()
+                    # 第一个成功备用工具结束，函数返回，记录原工具，为什么失败
                     return fb_result.model_copy(update={"output": merged})
             except (AppError, InvalidRequestError):
                 continue
@@ -113,6 +115,7 @@ async def executor_node(
         confirmed_action_id=state.get("confirm_action_id"),
         idempotency_key=state.get("idempotency_key"),
     )
+    # 负责查询和保存幂等记录的对象
     idempotency = IdempotencyRepository(get_db_session())
     calls = 0
     query = state["user_query"]
@@ -124,14 +127,19 @@ async def executor_node(
             break
         if not step.tool_name:
             continue
+        # 获取工具
         tool = registry.get(step.tool_name)
+        # 确认按钮
         confirmed = bool(state.get("confirm_action_id"))
         try:
             if tool.risk in WRITE_RISKS:
+                # 先问允许执行吗，也就是带没带确认
                 assert_permitted(tool, confirmed=confirmed)
                 idem_key = context.confirmed_action_id or context.idempotency_key
                 if idem_key:
+                    # 工具和参数计算指纹
                     fp = _fingerprint(tool.name, step.arguments)
+                    # 仓储按键来找指纹记录，比较当前算出的指纹和记录里保存的指纹是否一致，查到了就直接保存仓储中的记录，没有查到就
                     existing = await idempotency.get_if_matches(idem_key, fp)
                     if existing is not None:
                         results.append(
@@ -142,12 +150,14 @@ async def executor_node(
                         TOOL_CALLS.labels(tool=tool.name, status="idempotent").inc()
                         calls += 1
                         continue
+                    # 这个地方是这个键没有记录，就把已有的
                     result = await tool.run(step.arguments, context)
                     await idempotency.put(idem_key, fp, result.output)
                     TOOL_CALLS.labels(tool=tool.name, status="ok").inc()
                     results.append(result)
                     calls += 1
                     continue
+            # 这个地方应该是不是写操作的话，直接执行工具，保存工具结果
             result = await execute_with_fallback(tool, step, context, registry, query)
             TOOL_CALLS.labels(tool=tool.name, status="ok").inc()
             results.append(result)

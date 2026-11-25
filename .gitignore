@@ -1,69 +1,18 @@
-# Secrets
 .env
-.env.local
-.env.*.local
-*.pem
-credentials.json
-
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
+.env.*
+!.env.example
 .venv/
-frontend/node_modules/
-frontend/dist/
-frontend/*.tsbuildinfo
-venv/
-env/
+__pycache__/
+*.pyc
 *.egg-info/
-.eggs/
-dist/
-build/
 .pytest_cache/
-.mypy_cache/
 .ruff_cache/
+.mypy_cache/
 .coverage
-htmlcov/
-.tox/
-
-# Local data
-data/local/
-data/*.db
-data/*.sqlite
-*.sqlite3
-output/
-
-# Vector / cache
-.qdrant/
-.redis-dump/
-
-# IDE
-.idea/
-.vscode/
-*.swp
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Eval artifacts (keep reports/ tracked templates only)
-eval/reports/*.json
-eval/reports/*.html
-!eval/reports/.gitkeep
-
-# Logs
-logs/
+node_modules/
+dist/
+data/
+eval/reports/
+*.db
+*.sqlite*
 *.log
-
-# AI assistant / editor workspace metadata
-.workbuddy-ai/
-.tmpcmp/
-.cursor/
-.aider*
-
-# Local scratch
-*.tmp
-scratch/
-.node/

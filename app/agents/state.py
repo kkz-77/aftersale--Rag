@@ -12,8 +12,8 @@ from app.schemas.retrieval import Citation, RetrievedChunk
 class AgentState(TypedDict, total=False):
     """LangGraph state. Partial updates replace listed keys; no infinite append reducer.
 
-    Messages are compressed explicitly in the memory node instead of Annotated[add]
-    so the graph cannot silently blow the 128k budget.
+    Rolling summaries run explicitly after the answer. Model-input selection
+    separately enforces the approximate history budget; raw records stay in SQLite.
     """
 
     trace_id: str
@@ -22,6 +22,9 @@ class AgentState(TypedDict, total=False):
     user_query: str
     messages: list[ChatMessage]
     summary: str
+    summary_upto_message_id: int
+    summary_updated: bool
+    memory_stats: dict[str, Any]
     intent: IntentResult | None
     complexity: ComplexityResult | None
     strategy: RetrievalStrategy | None

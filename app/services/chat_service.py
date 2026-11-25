@@ -8,6 +8,7 @@ import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import cast
+from weakref import WeakValueDictionary
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -39,6 +40,7 @@ class PendingConfirmation:
     expires_at: float
 
 
+# 聊天模块的核心类，主要就是初始化state，然后执行图，得到结果，封装为前端可以响应的格式
 class ChatService:
     def __init__(
         self,
@@ -59,6 +61,8 @@ class ChatService:
         self._rate_limiter = rate_limiter
         self.registry = registry or build_tool_registry(retriever)
         self._pending_actions: dict[str, PendingConfirmation] = {}
+        # 仅同一进程内串行同session；不扩展为分布式并发方案。
+        self._session_locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
         self._graph = build_graph(
             llm=llm,
             settings=settings,
@@ -68,6 +72,19 @@ class ChatService:
         )
 
     async def chat(self, request: ChatRequest, *, trace_id: str) -> ChatResponse:
+        session_id = request.session_id or new_id("sess_")
+        request = request.model_copy(update={"session_id": session_id})
+        async with self._session_lock(session_id):
+            return await self._chat(request, trace_id=trace_id)
+
+    def _session_lock(self, session_id: str) -> asyncio.Lock:
+        lock = self._session_locks.get(session_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._session_locks[session_id] = lock
+        return lock
+
+    async def _chat(self, request: ChatRequest, *, trace_id: str) -> ChatResponse:
         await self._enforce_rate_limit(request.user_id)
         started = time.perf_counter()
         session_id = request.session_id or new_id("sess_")
@@ -75,13 +92,27 @@ class ChatService:
             state = await self._initial_state(db, request, session_id, trace_id)
             result = await self._invoke(state)
             response = self._to_response(result, session_id=session_id, trace_id=trace_id)
-            await self._persist(db, request, response, summary=result.get("summary") or "")
+            await self._persist(
+                db,
+                request,
+                response,
+                summary=result.get("summary") or "",
+                summary_updated=bool(result.get("summary_updated")),
+                summary_upto_message_id=result.get("summary_upto_message_id"),
+            )
             await db.commit()
         self._remember_pending(request, response)
         self._observe(response, started)
         return response
 
     async def stream(self, request: ChatRequest, *, trace_id: str) -> AsyncIterator[dict]:
+        session_id = request.session_id or new_id("sess_")
+        request = request.model_copy(update={"session_id": session_id})
+        async with self._session_lock(session_id):
+            async for event in self._stream(request, trace_id=trace_id):
+                yield event
+
+    async def _stream(self, request: ChatRequest, *, trace_id: str) -> AsyncIterator[dict]:
         """SSE: report progress, then send only the validated user-facing answer."""
         await self._enforce_rate_limit(request.user_id)
         started = time.perf_counter()
@@ -142,7 +173,14 @@ class ChatService:
                 raise holder["error"]
             merged: AgentState = holder["merged"]
             response = self._to_response(merged, session_id=session_id, trace_id=trace_id)
-            await self._persist(db, request, response, summary=merged.get("summary") or "")
+            await self._persist(
+                db,
+                request,
+                response,
+                summary=merged.get("summary") or "",
+                summary_updated=bool(merged.get("summary_updated")),
+                summary_upto_message_id=merged.get("summary_upto_message_id"),
+            )
             await db.commit()
         self._remember_pending(request, response)
         self._observe(response, started)
@@ -167,15 +205,21 @@ class ChatService:
     ) -> AgentState:
         confirmed_action = self._resolve_confirmation(request, session_id)
         sessions = SessionRepository(db)
+        # 记忆改造第1步：复用会话中已保存的摘要，而不是每轮重置为空。
         await sessions.get_or_create(session_id, request.user_id)
-        history = await sessions.recent_messages(session_id)
+        memory = await sessions.get_memory(session_id)
+        cursor = memory.summary_upto_message_id if memory else 0
+        # 不只读取最近20条：未摘要缓冲必须可恢复；已有摘要无游标时不猜测范围。
+        history = await sessions.unsummarized_messages(session_id, after_id=cursor)
         return {
             "trace_id": trace_id,
             "session_id": session_id,
             "user_id": request.user_id,
             "user_query": request.message,
             "messages": history,
-            "summary": "",
+            "summary": memory.summary if memory else "",
+            "summary_upto_message_id": cursor,
+            "summary_updated": False,
             "retrieved_chunks": [],
             "tool_results": [],
             "citations": [],
@@ -236,12 +280,18 @@ class ChatService:
         response: ChatResponse,
         *,
         summary: str = "",
+        summary_updated: bool = False,
+        summary_upto_message_id: int | None = None,
     ) -> None:
         sessions = SessionRepository(db)
+        if summary_updated:
+            if not summary or not summary_upto_message_id:
+                raise InvalidRequestError("更新摘要必须同时提供有效摘要和真实覆盖位置。")
+            await sessions.save_summary(
+                response.session_id, summary, upto_message_id=summary_upto_message_id
+            )
         await sessions.append_message(response.session_id, "user", request.message)
         await sessions.append_message(response.session_id, "assistant", response.answer)
-        if summary:
-            await sessions.save_summary(response.session_id, summary)
 
     def _to_response(
         self,

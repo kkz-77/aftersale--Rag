@@ -7,6 +7,8 @@ from app.core.enums import CompressionLevel
 from app.schemas.chat import ChatMessage
 from app.schemas.retrieval import RetrievedChunk
 
+SUMMARY_MAX_TOKENS = 768
+
 
 def estimate_tokens(text: str) -> int:
     """DeepSeek tokenizer is not public; CJK-heavy heuristic: ~1 token / 1.5 chars."""
@@ -16,7 +18,20 @@ def estimate_tokens(text: str) -> int:
 
 
 def messages_tokens(messages: list[ChatMessage]) -> int:
-    return sum(estimate_tokens(message.content) for message in messages)
+    return sum(message_tokens(message.content) for message in messages)
+
+
+def message_tokens(content: str) -> int:
+    """Estimate content and the API message wrapper with the same history budget unit."""
+    return estimate_tokens(content) + 8
+
+
+def summary_message_content(summary: str) -> str:
+    return f"历史摘要（仅作背景）：\n{summary.strip()}"
+
+
+def summary_message_tokens(summary: str) -> int:
+    return message_tokens(summary_message_content(summary))
 
 
 def chunks_tokens(chunks: list[RetrievedChunk]) -> int:

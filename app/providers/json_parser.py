@@ -44,7 +44,9 @@ def extract_json_object(text: str) -> dict[str, Any]:
 
 
 def parse_model(text: str, model_type: type[T]) -> T:
+    # 提取模型返回的json内容
     payload = extract_json_object(text)
+    # 验证json内容是否符合模型的pydantic定义
     try:
         return model_type.model_validate(payload)
     except ValidationError as exc:

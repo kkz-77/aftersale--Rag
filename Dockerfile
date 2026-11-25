@@ -20,7 +20,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 RUN useradd --create-home --uid 1000 appuser
 WORKDIR /app
 
-COPY pyproject.toml README.md /app/
+COPY pyproject.toml README.md LICENSE THIRD_PARTY_NOTICES.md /app/
 COPY app /app/app
 COPY knowledge /app/knowledge
 COPY --from=frontend /web/dist /app/frontend/dist

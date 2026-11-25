@@ -21,7 +21,7 @@ from eval.metrics import (
 from eval.runner import (
     _doc_stem,
     _keyword_hit,
-    _resume_bullets,
+    _metric_summary,
     _summarize_scores,
     _unique_stems,
     load_jsonl,
@@ -194,7 +194,7 @@ def test_keyword_hit_requires_every_keyword() -> None:
     assert _keyword_hit("七天无理由退货", ["七天", "发票"]) is False
 
 
-# --- runner: _resume_bullets ------------------------------------------------
+# --- runner: _metric_summary ------------------------------------------------
 
 
 def _report() -> dict:
@@ -244,12 +244,12 @@ def _report() -> dict:
     }
 
 
-def test_resume_bullets_empty_report() -> None:
-    assert _resume_bullets({}) == []
+def test_metric_summary_empty_report() -> None:
+    assert _metric_summary({}) == []
 
 
-def test_resume_bullets_cover_every_section() -> None:
-    bullets = _resume_bullets(_report())
+def test_metric_summary_cover_every_section() -> None:
+    bullets = _metric_summary(_report())
     # intent + bm25 + dense + hybrid+rrf + cross-encoder + 2 generation + e2e
     assert len(bullets) == 8
 
@@ -267,6 +267,6 @@ def test_resume_bullets_cover_every_section() -> None:
     assert any("E2E 16 条：P50 900ms / P95 2100ms" in b for b in bullets)
 
 
-def test_resume_bullets_without_earlier_intent_versions() -> None:
-    bullets = _resume_bullets({"intent_v3": {"accuracy": 0.90, "n": 10}})
+def test_metric_summary_without_earlier_intent_versions() -> None:
+    bullets = _metric_summary({"intent_v3": {"accuracy": 0.90, "n": 10}})
     assert bullets == ["意图识别：10 条 intent_v3+overlay 90.0%"]

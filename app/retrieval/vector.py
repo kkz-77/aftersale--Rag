@@ -76,6 +76,7 @@ class QdrantVectorStore:
             self._client = QdrantClient(url=self._url, timeout=5.0)
         return self._client
 
+    # 确保表存在，不存在则创建，存在则不创建
     def ensure_collection(self) -> None:
         from qdrant_client.models import Distance, VectorParams
 

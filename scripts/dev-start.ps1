@@ -1,5 +1,5 @@
 param(
-  [int]$ApiPort = 8002,
+  [int]$ApiPort = 8000,
   [int]$FrontendPort = 5173
 )
 
@@ -16,11 +16,11 @@ $env:CROSS_ENCODER_ENABLED = "false"
 $env:UNSTRUCTURED_ENABLED = "false"
 $env:VITE_API_BASE = "http://127.0.0.1:$ApiPort"
 
-Start-Process -FilePath ".venv\Scripts\python.exe" `
+Start-Process -WindowStyle Hidden -FilePath ".venv\Scripts\python.exe" `
   -ArgumentList "-m", "uvicorn", "app.asgi:app", "--host", "127.0.0.1", "--port", "$ApiPort" `
   -WorkingDirectory $root
 
-Start-Process -FilePath "frontend\.\node_modules\.bin\vite.cmd" `
+Start-Process -WindowStyle Hidden -FilePath "frontend\.\node_modules\.bin\vite.cmd" `
   -ArgumentList "--host", "127.0.0.1", "--port", "$FrontendPort" `
   -WorkingDirectory (Join-Path $root "frontend")
 

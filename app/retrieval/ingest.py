@@ -76,13 +76,18 @@ class KnowledgeIngestor:
         self._embedder = embedder
         self._settings = settings or get_settings()
 
+    # 加载知识库 chunck纯文本块，records文本块+向量
     async def load(self) -> tuple[list[RetrievedChunk], list[VectorRecord]]:
+        # 列出所有文件路径
         files = list_knowledge_files(self._knowledge_dir)
         chunks: list[RetrievedChunk] = []
         for path in files:
+            # 按照文件名的前缀贴分类标签
             category = category_for_stem(path.stem)
+            # 生成文档id
             document_id = document_id_from_path(path, root=self._knowledge_dir)
             title = path.stem
+            # asyncio.to_thread 是为了异步调用 parse_path 函数，因为 parse_path 是同步的
             file_chunks = await asyncio.to_thread(
                 parse_path,
                 path,
@@ -91,7 +96,9 @@ class KnowledgeIngestor:
                 category=category,
                 settings=self._settings,
             )
+            # 每个文件的块增加到总表
             chunks.extend(file_chunks)
+        # 去重
         chunks = dedupe_chunks(chunks)
         if not chunks:
             return [], []
@@ -123,19 +130,26 @@ async def ingest_knowledge(
     embedding_dim: int = 512,
 ) -> tuple[BM25Retriever, InMemoryVectorStore | QdrantVectorStore, list[RetrievedChunk]]:
     """Prefer Qdrant when configured; fall back to memory if Qdrant is down."""
+    # 日志和配置
     logger = logging.getLogger(__name__)
     resolved = settings or get_settings()
+
+    # 这是离线构造知识库的总入口，传入知识库的路径，embedder还有设置
     ingestor = KnowledgeIngestor(knowledge_dir, embedder, settings=resolved)
+    # 加载知识库
     chunks, records = await ingestor.load()
     bm25 = BM25Retriever(chunks)
     if qdrant_url:
+        # 如果配置了qdrant，就用qdrant存储，服务器地址，表名，向量维度
         store = QdrantVectorStore(qdrant_url, qdrant_collection, embedding_dim)
         try:
+            # 确保表存在，不存在则创建，存在则不创建，把records更新到表中
             await asyncio.to_thread(store.ensure_collection)
             await asyncio.to_thread(store.upsert, records)
             return bm25, store, chunks
         except Exception:
             logger.warning("qdrant_ingest_failed_using_memory")
     memory = InMemoryVectorStore()
+    # 内存存储，有则更新，没有则插入，records
     memory.upsert(records)
     return bm25, memory, chunks

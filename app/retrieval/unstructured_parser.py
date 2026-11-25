@@ -240,6 +240,8 @@ def parse_path(
     """Partition a file into RetrievedChunk. Markdown heading split is the fallback."""
     source = str(path)
     suffix = path.suffix.lower()
+    # 如果是布局文件，或者配置了unstructured解析，就用unstructured解析
+    # 否则用用markdown解析
     use_unstructured = partition_fn is not None or (
         unstructured_should_load(settings) and unstructured_available()
     )

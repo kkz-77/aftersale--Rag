@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from collections.abc import AsyncIterator
+from typing import Any
 
 import httpx
 
@@ -12,6 +14,7 @@ from app.config.settings import Settings
 from app.core.exceptions import LLMProviderError
 from app.core.retry import is_retryable_status, with_exponential_backoff
 from app.providers.base import LLMResponse
+from app.providers.call_trace import current_call_trace
 from app.schemas.common import TokenUsage
 
 logger = logging.getLogger(__name__)
@@ -65,8 +68,19 @@ class DeepSeekProvider:
         }
         if response_format is not None:
             payload["response_format"] = response_format
+        # httpx 直接发送 JSON：qwen-flash 用 enable_thinking=false 关闭思考。
+        # 必须判断 is not None，否则 False 会被遗漏。
+        if self._settings.llm_enable_thinking is not None:
+            payload["enable_thinking"] = self._settings.llm_enable_thinking
+        # 保留 Omni 的思考强度配置入口；本轮默认不发送此项。
+        if self._settings.llm_reasoning_effort is not None:
+            payload["reasoning_effort"] = self._settings.llm_reasoning_effort
 
         async def _call() -> LLMResponse:
+            trace = current_call_trace.get()
+            attempt: dict[str, Any] = {"usage": None, "response_model": None}
+            if trace is not None:
+                trace.append(attempt)
             try:
                 response = await self._client.post(
                     "/chat/completions",
@@ -78,6 +92,7 @@ class DeepSeekProvider:
             except httpx.HTTPError as exc:
                 raise LLMProviderError("DeepSeek transport error") from exc
 
+            attempt["http_status"] = response.status_code
             if response.status_code in {400, 401, 403, 404, 422}:
                 raise LLMProviderError(
                     f"DeepSeek HTTP {response.status_code}",
@@ -91,6 +106,13 @@ class DeepSeekProvider:
                 raise LLMProviderError(f"DeepSeek HTTP {response.status_code}")
 
             body = response.json()
+            raw_usage = body.get("usage")
+            if isinstance(raw_usage, dict):
+                attempt["usage"] = {
+                    k: raw_usage.get(k)
+                    for k in ("prompt_tokens", "completion_tokens", "total_tokens")
+                }
+            attempt["response_model"] = body.get("model")
             try:
                 content = body["choices"][0]["message"]["content"]
             except (KeyError, IndexError, TypeError) as exc:
@@ -105,11 +127,24 @@ class DeepSeekProvider:
                 content=content or "", usage=usage, model=self._settings.deepseek_model
             )
 
-        return await with_exponential_backoff(
-            _call,
-            max_attempts=self._settings.llm_max_retries,
-            operation_name="deepseek.generate",
-        )
+        # return await with_exponential_backoff(
+        #     _call,
+        #     max_attempts=self._settings.llm_max_retries,
+        #     operation_name="deepseek.generate",
+        # )
+        started = time.perf_counter()
+
+        try:
+            return await with_exponential_backoff(
+                _call,
+                max_attempts=self._settings.llm_max_retries,
+                operation_name="deepseek.generate",
+            )
+        finally:
+            logger.warning(
+                "LLM generate duration: %.2f seconds",
+                time.perf_counter() - started,
+            )
 
     async def stream(
         self,
@@ -132,6 +167,11 @@ class DeepSeekProvider:
         }
         if response_format is not None:
             payload["response_format"] = response_format
+        # 流式接口同步使用该配置，避免两种调用方式的思考模式不一致。
+        if self._settings.llm_enable_thinking is not None:
+            payload["enable_thinking"] = self._settings.llm_enable_thinking
+        if self._settings.llm_reasoning_effort is not None:
+            payload["reasoning_effort"] = self._settings.llm_reasoning_effort
 
         try:
             async with self._client.stream(

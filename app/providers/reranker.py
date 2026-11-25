@@ -114,8 +114,13 @@ class CrossEncoderRerankProvider:
         model = self._ensure_model()
         if model is None:
             return await self._fallback.rerank(query, documents, top_n=top_n)
+
+        # 将用户问题和文档打包
         pairs = [(query, document) for document in documents]
+        # 计算问题和文档的相关性得分
         scores = await asyncio.to_thread(self._predict, model, pairs)
+        # 对得分进行排序
+        # 按得分从高到低排序
         ranked = sorted(enumerate(scores), key=lambda item: item[1], reverse=True)
         return [(index, score) for index, score in ranked[:top_n]]
 

@@ -34,7 +34,9 @@ class HybridRetriever:
         self._rrf_k = rrf_k
         self._cache = cache
 
+    # 这个地方传入的是关键词和top-k
     async def retrieve(self, query: str, *, top_k: int) -> list[RetrievedChunk]:
+        # 首先是查缓存，如果有就直接返回缓存结果
         if self._cache is not None:
             cached = await self._cache.get(query, top_k)
             if cached is not None:
@@ -44,11 +46,13 @@ class HybridRetriever:
         dense: list[RetrievedChunk] = []
         lexical_error: Exception | None = None
         dense_error: Exception | None = None
+        # bm25搜索，精准匹配
         try:
             lexical = self._bm25.search(query, top_k=top_k)
         except Exception as exc:  # BM25 is in-process; unexpected errors still isolated
             lexical_error = exc
             logger.exception("bm25_failed")
+        # dense搜索，语义匹配，通过向量相似度计算
         try:
             dense = await self._vector.search(query, top_k=top_k)
         except Exception as exc:
@@ -58,6 +62,7 @@ class HybridRetriever:
             raise RetrievalError("both lexical and dense retrievers failed") from (
                 dense_error or lexical_error
             )
+        # 融合bm25和dense搜索结果，返回排好的序RRF融合
         fused = reciprocal_rank_fusion([lexical, dense], k=self._rrf_k)
         elapsed_ms = (time.perf_counter() - started) * 1000
         logger.info(
@@ -70,6 +75,7 @@ class HybridRetriever:
                 "latency_ms": round(elapsed_ms, 2),
             },
         )
+        # 截断融合结果，只返回top-k个
         trimmed = fused[:top_k]
         if self._cache is not None:
             await self._cache.set(query, top_k, trimmed)

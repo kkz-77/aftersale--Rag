@@ -69,6 +69,7 @@ class Tool:
 
     async def run(self, arguments: dict[str, Any], context: ToolContext) -> ToolResult:
         """Validate, then execute, mapping unexpected errors to a tool failure."""
+        # 检验参数
         parsed = self.parse(arguments)
         try:
             return await self.execute(parsed, context)

@@ -79,7 +79,7 @@ async def capabilities(
     reranker_provider = getattr(container.chat_service, "_reranker", None)
     provider = getattr(reranker_provider, "_provider", None)
     reranker = getattr(provider, "backend", "unknown")
-    llm = "deepseek" if container.settings.llm_configured else "offline"
+    llm = "openai-compatible" if container.settings.llm_configured else "offline"
     cache = "redis" if container.redis is not None else "memory"
     vector_store_type = type(container.vector_store).__name__ if container.vector_store else "none"
     vector_store = "memory" if vector_store_type == "InMemoryVectorStore" else vector_store_type

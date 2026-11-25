@@ -8,11 +8,13 @@ from app.agents.nodes.intent_overlay import apply_intent_overlay
 from app.core.constants import PROMPT_VERSION_INTENT
 from app.core.enums import IntentLabel
 from app.core.exceptions import LLMOutputError, LLMProviderError
+from app.memory.context import build_decision_messages
 from app.prompts.intent import INTENT_SYSTEM, INTENT_USER
 from app.providers.base import LLMProvider
 from app.providers.fake import OfflineLLMProvider
 from app.providers.json_parser import parse_model
 from app.schemas.agent import IntentResult
+from app.schemas.chat import ChatMessage
 
 _KEYWORD_RULES: list[tuple[tuple[str, ...], IntentLabel]] = [
     (("转人工", "人工客服"), IntentLabel.HUMAN_HANDOFF),
@@ -74,32 +76,58 @@ class IntentClassifier:
         self._prompt_version = prompt_version
         self._apply_overlay = apply_overlay
 
-    async def classify(self, query: str) -> IntentResult:
+    async def classify(
+        self,
+        query: str,
+        *,
+        history: list[ChatMessage] | None = None,
+        summary: str = "",
+        diagnostics: dict | None = None,
+    ) -> IntentResult:
+        details = diagnostics if diagnostics is not None else {}
+        details.update(source="model", fallback_reason=None)
         fallback = rule_based_intent(query)
         if isinstance(self._llm, OfflineLLMProvider):
+            details.update(
+                source="offline_rules",
+                fallback_reason="offline_rules",
+                pre_overlay_label=fallback.label.value,
+            )
             return self._maybe_overlay(query, fallback)
         try:
             response = await self._llm.generate(
-                [
-                    {"role": "system", "content": self._system_prompt},
-                    {
-                        "role": "user",
-                        "content": INTENT_USER.format(
-                            query=query, prompt_version=self._prompt_version
-                        ),
-                    },
-                ],
+                # 记忆改造第2步：模型结合历史分类，规则覆盖仍只判断本轮原话。
+                build_decision_messages(
+                    system_prompt=self._system_prompt,
+                    current_prompt=INTENT_USER.format(
+                        query=query, prompt_version=self._prompt_version
+                    ),
+                    history=history,
+                    summary=summary,
+                ),
                 temperature=0.0,
                 max_tokens=256,
                 response_format={"type": "json_object"},
             )
+            # 解析模型返回的json内容为IntentResult对象
             parsed = parse_model(response.content, IntentResult)
             if not parsed.prompt_version:
                 parsed.prompt_version = self._prompt_version
+            details["pre_overlay_label"] = parsed.label.value
             return self._maybe_overlay(query, parsed)
-        except (LLMProviderError, LLMOutputError):
+        except (LLMProviderError, LLMOutputError) as exc:
+            details.update(
+                source="fallback_rules",
+                fallback_reason="request_failed"
+                if isinstance(exc, LLMProviderError)
+                else "parse_or_validation_failed",
+                error_type=type(exc).__name__,
+                pre_overlay_label=fallback.label.value,
+            )
+            # 网络故障，或者是返回的不是json都报异常，返回fallback
             return self._maybe_overlay(query, fallback)
 
+    # 纠正层，判断llm的判断是否正确
     def _maybe_overlay(self, query: str, parsed: IntentResult) -> IntentResult:
         if not self._apply_overlay:
             return parsed

@@ -59,9 +59,16 @@ def build_graph(
     summarizer = ConversationSummarizer(llm)
 
     graph = StateGraph(AgentState)
+    # 输入进来先经过安全检索，意识判断，路由选择
     graph.add_node("apply_guardrail", guardrail_node)
-    graph.add_node("classify_intent", partial(intent_node, classifier=classifier))
-    graph.add_node("route_complexity", partial(router_node, router=adaptive))
+    graph.add_node(
+        "classify_intent",
+        partial(intent_node, classifier=classifier, use_history=settings.memory_in_decisions),
+    )
+    graph.add_node(
+        "route_complexity",
+        partial(router_node, router=adaptive, use_history=settings.memory_in_decisions),
+    )
     graph.add_node(
         "retrieve_docs",
         partial(
@@ -73,9 +80,21 @@ def build_graph(
             settings=settings,
         ),
     )
-    graph.add_node("plan_tasks", partial(planner_node, planner=planner))
+    graph.add_node(
+        "plan_tasks",
+        partial(planner_node, planner=planner, use_history=settings.memory_in_decisions),
+    )
     graph.add_node("execute_tools", partial(executor_node, registry=registry, settings=settings))
-    graph.add_node("generate_answer", partial(generate_node, llm=llm))
+    # 记忆改造第1步：把项目预算传给生成前的历史上下文组装器。
+    graph.add_node(
+        "generate_answer",
+        partial(
+            generate_node,
+            llm=llm,
+            token_budget=settings.token_budget,
+            use_history=settings.memory_in_generation,
+        ),
+    )
     graph.add_node("refuse_answer", refuse_node)
     graph.add_node("check_faithfulness", partial(faithfulness_node, checker=checker, llm=llm))
     graph.add_node("compact_memory", partial(memory_node, settings=settings, summarizer=summarizer))

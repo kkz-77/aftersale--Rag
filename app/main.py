@@ -26,6 +26,7 @@ from app.services.container import build_container
 logger = logging.getLogger(__name__)
 
 
+# 整个生命周期，主要是加载一些配置，容器
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Build the container on startup and release it on shutdown."""
@@ -39,6 +40,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await container.aclose()
 
 
+# 创建app,生命周期，注册路由
 def create_app(settings: Settings | None = None) -> FastAPI:
     """Create the FastAPI application.
 

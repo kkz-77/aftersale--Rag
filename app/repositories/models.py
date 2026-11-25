@@ -81,9 +81,19 @@ class SessionRow(Base):
 
     session_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     user_id: Mapped[str] = mapped_column(String(64), index=True)
-    summary: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class SessionMemoryRow(Base):
+    __tablename__ = "session_memory"
+
+    session_id: Mapped[str] = mapped_column(ForeignKey("sessions.session_id"), primary_key=True)
+    summary: Mapped[str] = mapped_column(Text)
+    summary_upto_message_id: Mapped[int] = mapped_column(Integer)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
 
 
 class MessageRow(Base):

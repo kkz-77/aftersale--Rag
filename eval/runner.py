@@ -1,4 +1,4 @@
-"""Offline eval harness for resume-quantifiable metrics.
+"""Offline eval harness for reproducible metrics.
 
 python -m eval.runner --task all --llm
 python -m eval.runner --task intent --llm
@@ -472,7 +472,7 @@ async def eval_e2e() -> dict:
     }
 
 
-def _resume_bullets(report: dict) -> list[str]:
+def _metric_summary(report: dict) -> list[str]:
     bullets = []
     intent_rules = report.get("intent_rules")
     intent_v1 = report.get("intent_v1")
@@ -557,7 +557,7 @@ async def run_all(*, llm: bool) -> dict:
         report["intent_v3"] = await eval_intent_llm(version="intent_v3", overlay=True)
         report["generation"] = await eval_generation()
         report["e2e"] = await eval_e2e()
-    report["resume_bullets"] = _resume_bullets(report)
+    report["metric_summary"] = _metric_summary(report)
     return report
 
 
@@ -583,7 +583,7 @@ def main() -> None:
                 result["intent_v1"] = await eval_intent_llm(version="intent_v1", overlay=False)
                 result["intent_v2"] = await eval_intent_llm(version="intent_v2", overlay=False)
                 result["intent_v3"] = await eval_intent_llm(version="intent_v3", overlay=True)
-            result["resume_bullets"] = _resume_bullets(result)
+            result["metric_summary"] = _metric_summary(result)
             return result
         if args.task == "retrieval":
             return {"retrieval": await eval_retrieval()}

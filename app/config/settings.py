@@ -3,7 +3,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import SecretStr
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -25,10 +25,19 @@ class Settings(BaseSettings):
     api_v1_prefix: str = "/api/v1"
 
     deepseek_api_key: SecretStr = SecretStr("")
-    deepseek_base_url: str = "https://api.deepseek.com"
-    deepseek_model: str = "deepseek-chat"
+    deepseek_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    deepseek_model: str = "qwen-flash"
     llm_timeout_seconds: float = 30.0
     llm_max_retries: int = 3
+    # 模型的思考控制参数不同，两项只选一项配置，不要同时设置。
+    # qwen-flash：在 .env 配置 LLM_ENABLE_THINKING=false，明确关闭思考。
+    # None 表示不发送该参数，避免影响不支持此参数的模型。
+    llm_enable_thinking: bool | None = None
+    # qwen3.8-omni-flash 对照实验用此项；字符串 "none" 关闭思考。
+    # 本轮换 qwen-flash，默认不再发送 reasoning_effort。
+    llm_reasoning_effort: (
+        Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"] | None
+    ) = None
 
     embedding_api_key: SecretStr = SecretStr("")
     embedding_base_url: str = ""
@@ -57,6 +66,16 @@ class Settings(BaseSettings):
     max_retrieval_hops: int = 3
 
     token_budget: int = 128_000
+    # 记忆改造第2步：两项开关用于同模型、同数据的A/B/C对照，不更改.env。
+    # A=False/False；B=True/False；C=True/True（生成/决策）。
+    memory_in_generation: bool = True
+    memory_in_decisions: bool = True
+    # 第3步：近期窗口是目标，不是立即删除旧消息的硬上限；与128k总预算分开。
+    memory_summary_trigger_tokens: int = Field(default=3328, ge=1)
+    memory_summary_target_tokens: int = Field(default=2867, ge=1)
+    memory_summary_input_tokens: int = Field(default=8192, ge=1, le=8192)
+    memory_summary_max_tokens: int = Field(default=512, ge=1, le=512)
+    memory_summary_timeout_seconds: float = Field(default=15.0, gt=0)
     compress_soft_ratio: float = 0.50
     compress_hard_ratio: float = 0.70
     auto_compact_ratio: float = 0.85

@@ -10,6 +10,8 @@ from app.schemas.retrieval import Citation
 
 
 class ChatMessage(BaseModel):
+    # 只有已保存历史具有真实ID，本轮新消息保持None，不能猜测其数据库ID。
+    id: int | None = None
     role: Literal["user", "assistant", "system", "tool"]
     content: str
     name: str | None = None

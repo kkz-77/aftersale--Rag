@@ -14,6 +14,7 @@ class IdempotencyRepository:
         self._session = session
 
     async def get_if_matches(self, key: str, fingerprint: str) -> dict | None:
+        # 按照主键找一条幂等记录
         row = await self._session.get(IdempotencyRow, key)
         if row is None:
             return None
