@@ -1,56 +1,90 @@
-﻿# 售后通 · AfterSale RAG
+# 售后通 · AfterSale RAG
 
-## 项目简介和演示场景
+售后通是一个面向电商售后的智能客服系统。用户可以在同一段对话里查询退换货政策、查看订单与物流，或发起需要确认的订单取消操作。
 
-售后通是一个面向电商售后的智能客服系统，由 FastAPI 提供接口、LangGraph 编排工作流，并使用 React 和 TypeScript 构建对话界面。系统支持带引用的售后政策问答、订单与物流查询，以及需要用户确认的取消订单操作。多轮会话使用 SQLite 保存原始消息、滚动摘要和摘要游标，服务重启后可恢复会话上下文。演示政策与订单使用虚构数据。**用 `u_demo` 查询 `ORD10001` 的物流，用 `ORD10003` 演示取消确认**。
+后端使用 **FastAPI、LangGraph 和 SQLite**，前端使用 **React 和 TypeScript**。系统按问题选择直接回答、检索或调用工具，并用近期对话和滚动摘要管理多轮上下文。
 
-## 五条处理路径
+## 功能演示
 
-| 路径 | 场景 | 行为 |
+### 多轮查单与取消确认
+
+用户先查询 `ORD10003`，随后只说「帮我取消该订单」。系统沿用上一轮的订单号，生成待确认动作，在卡片中展示操作对象。用户点击「确认执行」后，系统执行取消。再次查询同一订单，状态变为「已取消」。
+
+![用户在查单后省略订单号发起取消，系统展示 ORD10003 的确认卡片](docs/order-confirmation.png)
+
+<details>
+<summary>查看确认执行和状态复查</summary>
+
+点击确认后，系统返回取消结果。
+
+![确认执行后显示订单取消成功](docs/order-cancelled.png)
+
+重新查询订单状态，验证取消结果。
+
+![再次查询 ORD10003，返回已取消状态](docs/order-status-after.png)
+
+</details>
+
+### 多轮政策问答与引用
+
+用户先咨询普通 T 恤能否无理由退货，再追问「那这种情况退货运费谁承担？」系统结合前文按无理由退货场景回答，并展示对应的知识库来源。
+
+![退货资格与运费承担的多轮问答，回答附有政策引用](docs/policy-qa.png)
+
+## 系统设计
+
+| 处理路径 | 典型场景 | 处理方式 |
 | --- | --- | --- |
-| DIRECT | 问候和闲聊 | 直接回应，不检索 |
-| SINGLE | 单一政策问题 | BM25 与向量召回、RRF 融合、启用时 BGE 精排，提供引用 |
-| MULTI | 多条件和跨条款问题 | 查询改写、补充检索和自纠错，受跳数上限约束 |
-| AGENT | 订单、物流和售后业务 | 规划并调用工具，校验参数、权限与业务状态 |
-| REFUSE | 越权、注入或无法可靠处理 | 拒绝或引导人工处理 |
+| `DIRECT` | 问候、闲聊 | 直接生成回复 |
+| `SINGLE` | 单项政策咨询 | 检索相关条款并生成带引用的回答 |
+| `MULTI` | 涉及多个条件或条款的问题 | 根据证据充分性判断是否继续检索，受最大跳数约束 |
+| `AGENT` | 查询订单、跟踪物流、发起售后操作 | Planner 规划工具调用，Executor 校验参数与权限后执行 |
+| `REFUSE` | 越权请求或超出售后服务范围的问题 | 拒绝请求或提示下一步处理方式 |
 
-知识库提供政策证据，业务工具读取或修改结构化状态。高风险写操作先返回 `pending_action`，用户确认后携带 `confirm_action_id` 再执行，通过幂等键避免重复操作。确认不能绕过权限和订单状态检查。见 [接口说明](docs/api.md)。
+- **混合检索**：BM25 与向量召回并行，通过 RRF 融合排序。启用本地 Cross-Encoder 后，对候选文档进一步精排。
+- **多轮会话**：SQLite 保存原始消息、滚动摘要和摘要游标。模型优先使用近期对话，较早的内容通过摘要带入上下文。
+- **写操作确认**：取消订单等高风险操作先返回 `pending_action`。确认请求携带 `confirm_action_id`，后端校验用户、会话和业务状态，并通过幂等机制处理重复请求。
 
-## 评测结果与复现方式
+## 检索评测
 
-我的 65 条检索实测中，加入 BGE 精排后，**P@1 从 83.08% 到 89.23%，Recall@3 从 94.62% 到 96.15%**。这是固定演示知识库上的检索成绩，不代表线上业务成功率；本次发布整理未重跑真实模型评测。
+在同一组 **65 条售后知识检索样例**上，按知识文档 ID 对照标注评估各方案。启用 Cross-Encoder 精排的方案取得 **89.23% 的 P@1** 和 **96.15% 的 Recall@3**。
+
+| 检索方案 | P@1 | Recall@3 |
+| --- | ---: | ---: |
+| BM25 | 80.00% | 90.00% |
+| 向量检索 | 81.54% | 94.62% |
+| 混合检索 + RRF | 83.08% | 94.62% |
+| 混合检索 + RRF + Cross-Encoder 精排 | **89.23%** | **96.15%** |
+
+以上是固定演示知识库上的历史检索结果，统计的是文档检索表现。评测样例见 [检索数据集](eval/dataset/rag_eval.jsonl)。启用与评测一致的检索配置后，在项目根目录运行：
 
 ```powershell
-uv run pytest -q
 uv run python -m eval.runner --task retrieval
-cd frontend
-npm test
-npm run build
 ```
 
-评测使用 [65 条检索数据集](eval/dataset/rag_eval.jsonl)。启用 BGE 和精排后运行，结果写入 `eval/reports/`；检查实际后端，降级结果不能作为 BGE 成绩。`--task intent` 可离线评估规则；`--task all --llm` 会调用模型并产生费用。复现时记录模型、配置及依赖版本；历史评测产物未纳入公开版。
-
-在 65 条售后知识检索样例上，按知识文档 ID 对照标注计算 P@1 和 Recall@3。以下为同一题集上的历史实测结果。
-
-| 检索方案                            |    P@1 | Recall@3 |
-| ----------------------------------- | -----: | -------: |
-| BM25                                | 80.00% |   90.00% |
-| 向量检索                            | 81.54% |   94.62% |
-| 混合检索 + RRF                      | 83.08% |   94.62% |
-| 混合检索 + RRF + Cross-Encoder 精排 | 89.23% |   96.15% |
+结果写入 `eval/reports/`。复现时可通过 `/api/v1/capabilities` 核对实际启用的检索和精排后端。
 
 ## 快速开始
 
-需要 Python 3.11+、uv，以及 Node.js 20.19+ 或 22.12+（推荐 24）。从发布目录执行，PowerShell 示例：
+需要 Python 3.11+、[uv](https://docs.astral.sh/uv/) 和 Node.js 20.19+ 或 22.12+。以下为 Windows PowerShell 示例。
+
+**1. 安装后端依赖并创建本地配置**
 
 ```powershell
 uv sync --locked --extra dev
-Copy-Item .env.example .env
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
+```
+
+要接入线上模型，在本地 `.env` 填写 `DEEPSEEK_API_KEY`，并通过 `DEEPSEEK_BASE_URL` 和 `DEEPSEEK_MODEL` 选择服务地址及模型。百炼兼容接口示例见 [`.env.example`](.env.example)。API Key 留空时使用离线模式。请勿提交 `.env`。
+
+**2. 初始化演示数据并启动后端**
+
+```powershell
 uv run python -m scripts.seed_demo
 uv run uvicorn app.asgi:app --host 127.0.0.1 --port 8000
 ```
 
-另开终端：
+**3. 另开终端启动前端**
 
 ```powershell
 cd frontend
@@ -58,16 +92,14 @@ npm ci
 npm run dev
 ```
 
-访问 http://127.0.0.1:5173，第一条可试问法：“七天无理由退货需要满足什么条件？” API 文档 http://127.0.0.1:8000/docs；健康检查 `/api/v1/health`，实际能力 `/api/v1/capabilities`。后端启动时初始化 SQLite 并加载 `knowledge/`。演示订单由上面的种子脚本写入。
+- [前端工作台](http://127.0.0.1:5173)
+- [FastAPI 接口文档](http://127.0.0.1:8000/docs)
+- [运行能力检查](http://127.0.0.1:8000/api/v1/capabilities)
 
-最少配置就是复制模板：空密钥使用离线替代模型、BM25 和内存后端，可以验证流程，但不代表真实模型质量。接入 Qwen-Flash 时在本地 `.env` 填写 `DEEPSEEK_API_KEY`，保留模板的 `DEEPSEEK_BASE_URL`、`DEEPSEEK_MODEL=qwen-flash` 和 `LLM_ENABLE_THINKING=false`。字段名为兼容现有代码保留，实际服务由 URL 和模型名决定。不要提交 `.env`。
+如需启用本地 BGE，运行 `uv sync --locked --extra dev --extra rerank`，并在 `.env` 将 `LOCAL_EMBEDDING_ENABLED` 和 `CROSS_ENCODER_ENABLED` 设为 `true`。首次使用需下载模型。
 
-启用本地 BGE：执行 `uv sync --locked --extra dev --extra rerank`，将 `LOCAL_EMBEDDING_ENABLED`、`CROSS_ENCODER_ENABLED` 设为 `true`；首次使用需下载模型。PDF/Office 解析另需 `docs` 依赖和系统解析工具，默认关闭。
+更多信息见 [接口说明](docs/api.md) 和 [部署说明](docs/deployment.md)。演示政策与订单均为虚构数据。
 
-Docker 演示：`docker compose up --build -d`，访问 http://127.0.0.1:8000。见 [部署说明](docs/deployment.md)。
+## 致谢与许可证
 
-## 当前适用范围、上游致谢和许可证
-
-适用于本地学习、售后流程原型和离线评测。演示政策和订单不构成真实业务承诺。生产还需可信身份认证、业务授权、隐私治理与人工处理流程，不应直接暴露演示接口。
-
-基于上游 [JEen-wang/Adaptive-rag](https://github.com/JEen-wang/Adaptive-rag) 改造并保留 MIT 版权声明。我的改造包括 Qwen-Flash 接入、可恢复滚动摘要、检索与业务流程评测及公开版整理。沿用 [MIT LICENSE](LICENSE)，依赖与模型按各自许可使用，见 [第三方说明](THIRD_PARTY_NOTICES.md)。
+本项目基于 [JEen-wang/Adaptive-rag](https://github.com/JEen-wang/Adaptive-rag) 开发，沿用 [MIT 许可证](LICENSE)。第三方依赖与模型说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
